@@ -1,0 +1,893 @@
+# --------------------------------- Statistical Analysis -------------------------------------
+#https://joey711.github.io/phyloseq/preprocess.html
+
+#This will be analysis where a rarefied dataset is used (4542 reads), 
+#for alpha diversity and beta diversity analysis
+
+#1. Set working directory #
+setwd("C:/Emma/Masters 2023/Results eDNA/MiFish data/R analysis")
+
+#2. Load libraries #
+library(phyloseq)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(vegan)
+library("ggpubr")
+library(remotes)
+library(ape)
+library(scales) # scale functions for vizualizations
+library(grid)
+library(reshape2) # data manipulation package
+library(readxl)
+library(labdsv)
+library(viridis)
+library(tidyverse)
+library(multcomp)
+library(metagMisc)
+library(data.table)
+library(readxl)
+library(VennDiagram)
+library(microbiome)
+library(grid)
+library(MiscMetabar)
+library(pairwiseAdonis)
+
+#3. Load data, first OTU table #
+#Import OTU table
+otu_mat <- read_excel("otu_table.xlsx", col_names = TRUE)
+otu_mat <- otu_mat %>%
+  tibble::column_to_rownames("OTU_ID") 
+
+#Import taxonomy table
+taxa_mat <- read.csv("tax_table.csv", row.names=1)
+taxa_mat <- taxa_mat[, -1]
+
+
+#Import sample data
+sample_table <- read_excel("sample_data_final.xlsx")
+sample_table <- column_to_rownames(sample_table, "Sample_ID") 
+
+#4. Make phyloseq object #
+otu_mat <- as.matrix(otu_mat)
+tax_mat <- as.matrix(taxa_mat)
+
+OTU = otu_table(otu_mat, taxa_are_rows = TRUE)
+TAX = tax_table(tax_mat)
+samples = sample_data(sample_table)
+
+physeq <- phyloseq(OTU, TAX, samples)
+physeq
+
+taxa_table_final <- as.data.frame(tax_table(physeq))
+
+#5. Filtering  out all the non-fish OTUs and removing field blanks and the OTUs in the field blanks
+#remove samples with nothing in them #
+physeq_filtered <- prune_samples(sample_sums(physeq)>=1, physeq)
+physeq_filtered
+
+#remove OTUs with 0 read abundance
+otu_counts <- taxa_sums(physeq_filtered)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+physeq_filtered <- prune_taxa(non_zero_otus, physeq_filtered)
+
+# Now physeq_filtered is your phyloseq object without OTUs with zero counts
+physeq_filtered
+
+# subset phyloseq dataset for fish OTUs only, so we take out the taxa that 
+#are annotated as mammals and birds and OTUs that are not taxnomicaly assigned
+
+badTaxa = c("OTU00126","OTU00105", "OTU00007", "OTU00008","OTU00027", "OTU00039", "OTU00041", "OTU00062", "OTU00064", "OTU00065", "OTU00071","OTU00073", "OTU00074", "OTU00076", "OTU00079","OTU00091","OTU00092","OTU00101","OTU0010", "OTU00112", "OTU00114", "OTU00118", "OTU00120", "OTU00121", "OTU00122", "OTU00131", "OTU00139","OTU00141", "OTU00147", "OTU00154", "OTU00157","OTU00162", "OTU00163", "OTU00172", "OTU00177","OTU00178", "OTU00180", "OTU00184", "OTU00186","OTU00188","OTU00191","OTU00192","OTU00193","OTU00195", "OTU00196", "OTU00197", "OTU00198", "OTU00199", "OTU00202", "OTU00204","OTU00205", "OTU00207","OTU00208")
+allTaxa = taxa_names(physeq_filtered)
+allTaxa <- allTaxa[!(allTaxa %in% badTaxa)]
+physeq_final = prune_taxa(allTaxa, physeq_filtered )
+
+physeq_final
+
+#remove the fieldblank from mngazana sample
+#First, create a list of the samples that you want to remove
+Samples_toRemove <- c("S038")
+
+#To see what samples get removed, run the following; note, I have a column called "SampleID"
+subset_samples(physeq_final, Sample_Name2 %in% Samples_toRemove)
+#This will return a ps object that contains the samples you want to remove
+
+#To remove those from your phyloseq object
+physeq_final <- subset_samples(physeq_final, !(Sample_Name2 %in% Samples_toRemove))
+#This will return a physeq_final object with the samples removed
+
+# Remove OTUs with no reads
+# Calculate the total counts for each OTU
+otu_counts <- taxa_sums(physeq_final)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+physeq_filtered <- prune_taxa(non_zero_otus, physeq_final)
+
+# Now physeq_filtered is your phyloseq object without OTUs with zero counts
+physeq_filtered
+
+#Filter out samples with 0 reads in them 
+physeq_final <- prune_samples(sample_sums(physeq_filtered)>=1, physeq_filtered)
+physeq_final
+
+taxa_table_final <- as.data.frame(tax_table(physeq_final))
+sample_table_final <- as.data.frame(sample_data(physeq_final))
+otu_table_final <- as.data.frame(otu_table(physeq_final))
+
+                            
+#6. Calculate how many OTUs in each factor #
+
+Water <- subset_samples(physeq_rarefied, Substrate_type == "Water") 
+Sediment <- subset_samples(physeq_rarefied, Substrate_type == "Sediment") 
+
+#Water (135 otus)
+otu_counts <- taxa_sums(Water)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+Water <- prune_taxa(non_zero_otus, Water)
+Water
+
+otu_table_data_water <- otu_table(Water)
+
+# Calculate the total OTU reads
+total_otu_reads_water <- sum(otu_table_data_water)
+
+# Print the result
+total_otu_reads_water
+
+#Sediment (36 OTUs)
+otu_counts <- taxa_sums(Sediment)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+Sediment <- prune_taxa(non_zero_otus, Sediment)
+otu_table_data_Sediment <- otu_table(Sediment)
+Sediment
+
+# Calculate the total OTU reads
+total_otu_reads_Sediment <- sum(otu_table_data_Sediment)
+
+# Print the result
+total_otu_reads_Sediment
+
+Mangroves <- subset_samples(physeq_final, Habitat_type == "Mangroves") 
+Seagrass <- subset_samples(physeq_final, Habitat_type == "Seagrass") 
+
+#Water (135 otus)
+otu_counts <- taxa_sums(Water)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+Water <- prune_taxa(non_zero_otus, Water)
+Water
+
+otu_table_data_water <- otu_table(Water)
+
+# Calculate the total OTU reads
+total_otu_reads_water <- sum(otu_table_data_water)
+
+# Print the result
+total_otu_reads_water
+
+#Sediment (36 OTUs)
+otu_counts <- taxa_sums(Sediment)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+Sediment <- prune_taxa(non_zero_otus, Sediment)
+otu_table_data_Sediment <- otu_table(Sediment)
+Sediment
+
+# Calculate the total OTU reads
+total_otu_reads_Sediment <- sum(otu_table_data_Sediment)
+
+# Print the result
+total_otu_reads_Sediment
+
+
+#Do it for each estuary
+Nahoon_final <- subset_samples(physeq_final, Site == "Nahoon") 
+Nahoon_final <- otu_table(Nahoon_final)
+
+# Calculate the total OTU reads
+Nahoon_final <- sum(Nahoon_final)
+
+# Print the result
+Nahoon_final
+
+Mngazana_final <- subset_samples(physeq_final, Site == "Mngazana") 
+Mngazana_final <- otu_table(Mngazana_final)
+
+# Calculate the total OTU reads
+Mngazana_final <- sum(Mngazana_final)
+
+# Print the result
+Mngazana_final
+
+Kosi_final <- subset_samples(physeq_final, Site == "Kosi_bay") 
+Kosi_final <- otu_table(Kosi_final)
+
+# Calculate the total OTU reads
+Kosi_final <- sum(Kosi_final)
+
+# Print the result
+Kosi_final
+#6021840
+
+#7. Rarefy to even depth #
+
+#Rarefy the phyloseq object
+set.seed(123)
+physeq_rarefied = rarefy_even_depth(physeq_final, sample.size = 2108, rngseed = 123, verbose = TRUE)
+physeq_rarefied
+
+tax_table_physeq_rarefied <- as.data.frame(tax_table(physeq_rarefied))
+write.csv(tax_table_physeq_rarefied,"Taxa_table.csv")
+
+                                
+#8. Calculate the number of unique species, genera, family and order #
+Water_mangroves <- subset_samples(Water, Habitat_type == "Mangroves")
+otu_counts <- taxa_sums(Water_mangroves)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+WM <- prune_taxa(non_zero_otus, Water_mangroves)
+otu_table_data_Sediment <- otu_table(WM)
+WM
+
+Sediment_mangroves <- subset_samples(Sediment, Habitat_type == "Mangroves")
+otu_counts <- taxa_sums(Sediment_mangroves)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+SM <- prune_taxa(non_zero_otus, Sediment_mangroves)
+otu_table_data_Sediment <- otu_table(SM)
+SM
+
+Water_seagrass <- subset_samples(Water, Habitat_type == "Seagrass")
+otu_counts <- taxa_sums(Water_seagrass)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+WS <- prune_taxa(non_zero_otus, Water_seagrass)
+otu_table_data_Sediment <- otu_table(WS)
+WS
+
+Sediment_seagrass <- subset_samples(Sediment, Habitat_type == "Seagrass")
+otu_counts <- taxa_sums(Sediment_seagrass)
+# Identify OTUs with non-zero counts
+non_zero_otus <- names(otu_counts[otu_counts > 0])
+
+# Subset the phyloseq object to retain only OTUs with non-zero counts
+SS <- prune_taxa(non_zero_otus, Sediment_seagrass)
+otu_table_data_Sediment <- otu_table(SS)
+SS
+
+
+# Extract the taxonomic table
+tax_table <- tax_table(physeq_rarefied)
+
+# Count unique species
+num_species <- length(unique(tax_table[, "species"]))
+
+# Count unique genera
+num_genera <- length(unique(tax_table[, "genus"]))
+
+# Count unique families
+num_families <- length(unique(tax_table[, "family"]))
+
+# Count unique orders
+num_orders <- length(unique(tax_table[, "order"]))
+
+# Print the results
+cat("Number of unique species:", num_species, "\n")
+cat("Number of unique genera:", num_genera, "\n")
+cat("Number of unique families:", num_families, "\n")
+cat("Number of unique orders:", num_orders, "\n")
+
+#Water mangroves
+tax_table <- tax_table(WM)
+
+# Count unique species
+num_species <- length(unique(tax_table[, "species"]))
+
+# Count unique genera
+num_genera <- length(unique(tax_table[, "genus"]))
+
+# Count unique families
+num_families <- length(unique(tax_table[, "family"]))
+
+# Count unique orders
+num_orders <- length(unique(tax_table[, "order"]))
+
+# Print the results
+cat("Number of unique species:", num_species, "\n")
+cat("Number of unique genera:", num_genera, "\n")
+cat("Number of unique families:", num_families, "\n")
+cat("Number of unique orders:", num_orders, "\n")
+
+#Water seagrass
+tax_table <- tax_table(tax_table <- tax_table(WS))
+
+# Count unique species
+num_species <- length(unique(tax_table[, "species"]))
+
+# Count unique genera
+num_genera <- length(unique(tax_table[, "genus"]))
+
+# Count unique families
+num_families <- length(unique(tax_table[, "family"]))
+
+# Count unique orders
+num_orders <- length(unique(tax_table[, "order"]))
+
+# Print the results
+cat("Number of unique species:", num_species, "\n")
+cat("Number of unique genera:", num_genera, "\n")
+cat("Number of unique families:", num_families, "\n")
+cat("Number of unique orders:", num_orders, "\n")
+
+#Sediment mangroves
+tax_table <- tax_table(SM)
+
+# Count unique species
+num_species <- length(unique(tax_table[, "species"]))
+
+# Count unique genera
+num_genera <- length(unique(tax_table[, "genus"]))
+
+# Count unique families
+num_families <- length(unique(tax_table[, "family"]))
+
+# Count unique orders
+num_orders <- length(unique(tax_table[, "order"]))
+
+# Print the results
+cat("Number of unique species:", num_species, "\n")
+cat("Number of unique genera:", num_genera, "\n")
+cat("Number of unique families:", num_families, "\n")
+cat("Number of unique orders:", num_orders, "\n")
+
+#Sediment seagrass
+tax_table <- tax_table(tax_table <- tax_table(SS))
+
+# Count unique species
+num_species <- length(unique(tax_table[, "species"]))
+
+# Count unique genera
+num_genera <- length(unique(tax_table[, "genus"]))
+
+# Count unique families
+num_families <- length(unique(tax_table[, "family"]))
+
+# Count unique orders
+num_orders <- length(unique(tax_table[, "order"]))
+
+# Print the results
+cat("Number of unique species:", num_species, "\n")
+cat("Number of unique genera:", num_genera, "\n")
+cat("Number of unique families:", num_families, "\n")
+cat("Number of unique orders:", num_orders, "\n")
+
+#9. Make some Venn diagrams #
+
+#Water versus sediment
+Water <- subset_samples(physeq_rarefied, Substrate_type == "Water") 
+Sediment <- subset_samples(physeq_rarefied, Substrate_type == "Sediment") 
+
+# Check if there are any samples for both Water and Sediment
+if (nsamples(Water) > 0 & nsamples(Sediment) > 0) {
+  # Extract the taxa present in each subset
+  taxa_water_samples <- taxa_names(prune_taxa(taxa_sums(Water) > 0, Water))
+  taxa_sediment_samples <- taxa_names(prune_taxa(taxa_sums(Sediment) > 0, Sediment))
+  
+  # Create a list of taxa for the Venn diagram
+  venn_list_all <- list(Water = taxa_water_samples, Sediment = taxa_sediment_samples)
+  
+  # Generate the Venn diagram
+  venn.all <- venn.diagram(
+    x = venn_list_all,
+    category.names = c("Water", "Sediment"),
+    filename = NULL,
+    output = TRUE,
+    main = "Venn Diagram for all",  # Add title
+    lwd = 2,
+    fill = c("#619CFF", "#00BA38"),
+    alpha = 0.5,
+    cex = 1.5,
+    fontfamily = "sans",
+    fontface = "bold",
+    cat.cex = 1.5,
+    cat.fontfamily = "arial",
+    cat.fontface = "bold",
+    cat.pos = c(-50, -30),
+    cat.dist = c(0.03, 0.05)
+  )
+  
+  # Plot the Venn diagram
+  grid.newpage()
+  grid.draw(venn.all)
+}
+
+# Find the taxa that are exclusive to the sediment samples
+exclusive_sediment_taxa <- setdiff(taxa_sediment_samples, taxa_water_samples)
+
+# Print the exclusive sediment taxa
+print(exclusive_sediment_taxa)
+taxatable_sediment_EXCLUSIVE <- as.data.frame(tax_table(physeq_final))
+
+# Find the taxa that are exclusive to the water samples
+exclusive_water_taxa <- setdiff(taxa_water_samples, taxa_sediment_samples)
+taxatable_sediment_EXCLUSIVE <- as.data.frame(tax_table(physeq_final))
+
+# Print the exclusive water taxa
+print(exclusive_water_taxa)
+write.csv(exclusive_water_taxa,"OTUs_exclusive_water.csv")
+
+# Find the shared taxa between water and sediment samples
+shared_taxa <- intersect(taxa_water_samples, taxa_sediment_samples)
+print("Shared Taxa between Water and Sediment:")
+print(shared_taxa)
+
+# Mangrvoes vs seagrass
+Mangrove <- subset_samples(physeq_rarefied, Habitat_type == "Mangroves") 
+Seagrass <- subset_samples(physeq_rarefied, Habitat_type == "Seagrass") 
+
+# Check if there are any samples for both Water and Sediment
+if (nsamples(Mangrove) > 0 & nsamples(Seagrass) > 0) {
+  # Extract the taxa present in each subset
+  taxa_mangrove_samples <- taxa_names(prune_taxa(taxa_sums(Mangrove) > 0, Mangrove))
+  taxa_seagrass_samples <- taxa_names(prune_taxa(taxa_sums(Seagrass) > 0, Seagrass))
+  
+  # Create a list of taxa for the Venn diagram
+  venn_list_all <- list(Mangrove = taxa_mangrove_samples, Seagrass = taxa_seagrass_samples)
+  
+  # Generate the Venn diagram
+  venn.all <- venn.diagram(
+    x = venn_list_all,
+    category.names = c("Mangrove", "Seagrass"),
+    filename = NULL,
+    output = TRUE,
+    main = "Venn Diagram for all",  # Add title
+    lwd = 2,
+    fill = c("#619CFF", "#00BA38"),
+    alpha = 0.5,
+    cex = 2,
+    fontfamily = "arial",
+    fontface = "bold",
+    cat.cex = 1.5,
+    cat.fontfamily = "sans",
+    cat.fontface = "bold",
+    cat.pos = c(-160, 160),
+    cat.dist = c(0.05, 0.04)
+  )
+  
+  # Plot the Venn diagram
+  grid.newpage()
+  grid.draw(venn.all)
+}
+
+# Check if there are any samples for both Mangrove and Seagrass
+if (nsamples(Mangrove) > 0 & nsamples(Seagrass) > 0) 
+  # Extract the taxa present in each subset
+  taxa_mangrove_samples <- taxa_names(prune_taxa(taxa_sums(Mangrove) > 0, Mangrove))
+  taxa_seagrass_samples <- taxa_names(prune_taxa(taxa_sums(Seagrass) > 0, Seagrass))
+  
+  # Find the taxa that are exclusive to the seagrass samples
+  exclusive_seagrass_taxa <- setdiff(taxa_seagrass_samples, taxa_mangrove_samples)
+  print(exclusive_seagrass_taxa)
+
+  # Find the taxa that are exclusive to the mangroves samples
+  exclusive_mang_taxa <- setdiff(taxa_mangrove_samples, taxa_seagrass_samples)
+  print(exclusive_mang_taxa)
+  
+  # Find the shared taxa between habitats
+  shared_taxa <- intersect(taxa_seagrass_samples, taxa_mangrove_samples)
+  print("Shared Taxa between habitats:")
+  print(shared_taxa)
+
+# venn diagram to show overlap among estuaries
+Nahoon_samples <- subset_samples(physeq_final, Site == "Nahoon")
+Mngazana_samples <- subset_samples(physeq_final, Site == "Mngazana")
+Kosi_samples <- subset_samples(physeq_final, Site == "Kosi_bay")
+
+
+# Check if there are any samples for all three locations
+if (nsamples(Nahoon_samples) > 0 & nsamples(Mngazana_samples) > 0 & nsamples(Kosi_samples) > 0) {
+  # Extract the taxa present in each subset
+  taxa_Nahoon_samples <- taxa_names(prune_taxa(taxa_sums(Nahoon_samples) > 0, Nahoon_samples))
+  taxa_Mngazana_samples <- taxa_names(prune_taxa(taxa_sums(Mngazana_samples) > 0, Mngazana_samples))
+  taxa_Kosi_samples <- taxa_names(prune_taxa(taxa_sums(Kosi_samples) > 0, Kosi_samples))
+  
+  # Get the number of OTUs for each location
+  Nahoon_OTUs <- length(taxa_Nahoon_samples)
+  Mngazana_OTUs <- length(taxa_Mngazana_samples)
+  Kosi_OTUs <- length(taxa_Kosi_samples)
+  
+  # Create a list of taxa for the Venn diagram
+  venn_list_locations <- list(Nahoon = taxa_Nahoon_samples, Mngazana = taxa_Mngazana_samples, Kosi = taxa_Kosi_samples)
+  
+  # Generate the Venn diagram
+  venn.locations <- venn.diagram(
+    x = venn_list_locations,
+    category.names = c(paste("Nahoon (", Nahoon_OTUs, " OTUs)", sep=""),
+                       paste("Mngazana (", Mngazana_OTUs, " OTUs)", sep=""),
+                       paste("Kosi Bay (", Kosi_OTUs, " OTUs)", sep="")),
+    filename = NULL,
+    output = TRUE,
+    main = "Venn Diagram for Locations",  # Add title
+    lwd = 2,
+    fill = c("#619CFF", "#00BA38", "#F8766D"),
+    alpha = 0.5,
+    cex = 2,
+    fontfamily = "sans",
+    fontface = "bold",
+    cat.cex = 1,  # Adjust the size of the labels
+    cat.fontfamily = "sans",
+    cat.fontface = "bold",
+    cat.pos = c(-30, 30, 180),  # Adjust the position of the labels
+    cat.dist = c(0.07, 0.07, 0.05)  # Adjust the distance of the labels from the circles
+  )
+  
+  # Plot the Venn diagram
+  grid.newpage()
+  grid.draw(venn.locations)
+} else {
+  print("One or more subsets have no samples.")
+}
+
+# Find the OTUs shared among all three locations
+shared_OTUs <- Reduce(intersect, list(taxa_Nahoon_samples, taxa_Mngazana_samples, taxa_Kosi_samples))
+print(paste("Number of shared OTUs:", length(shared_OTUs)))
+print("Shared OTUs:")
+print(shared_OTUs)
+
+# Find the taxa that are exclusive to the sediment samples
+exclusive_sediment_taxa_kosi_bay <- setdiff(taxa_sediment_kosi_bay, taxa_water_kosi_bay)
+
+# Print the exclusive sediment taxa
+print(exclusive_sediment_taxa_kosi_bay)
+
+#10. Relative abundance plot graph 
+#family level for top 25
+# Glom at family level
+GP.genus <- tax_glom(physeq_final, taxrank = "family")
+
+# Top N taxa
+N <- 25
+top <- names(sort(taxa_sums(GP.genus), decreasing = TRUE))[1:N]
+
+# Calculate relative abundance
+GP.genus.prop <- transform_sample_counts(GP.genus, function(x) x / sum(x))
+
+# Subset object to top N taxa
+GP.genus.prop.top <- prune_taxa(top, GP.genus.prop)
+
+# Melt the phyloseq object to a data frame
+df <- psmelt(GP.genus.prop.top)
+
+# Define colors for families
+family_colors <- c(
+  "#CBD588", "#5F7FC7", "orange", "#DA5724", "#8DD3C7", "#CD9BCD",
+  "#AD6F3B", "#673770", "#D14285", "#652926", "#C84248", 
+  "#8569D5", "#5E738F", "#D1A33D", "#8A7C64", "#599861",
+  "#B3DE69", "#56B4E9", "#009E73", "#F0E442", "#E41A1C", 
+  "#FB8072", "#FCCDE5", "#FFFFB3", "#CCEBC5"
+)
+
+
+# Create the plot
+ggplot(df, aes(x = Substrate_type, y = Abundance, fill = family)) +
+  geom_bar(stat = "identity", position = "fill") +
+  facet_wrap(~ Habitat_type, scales = "free_x") +
+  ylab("Relative Abundance") +
+  theme_minimal() +
+  scale_fill_manual(values = family_colors) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_text(size = 10), 
+    legend.text = element_text(size = 8)
+  ) +
+  guides(fill = guide_legend(title = "Genus"))
+
+#2. Do one for family level for all OTUs
+# Glom at family level
+GP.family <- tax_glom(physeq_final, taxrank = "family")
+
+# Top N taxa
+N <- 30
+top <- names(sort(taxa_sums(GP.family), decreasing = TRUE))[1:N]
+
+# Calculate relative abundance
+GP.family.prop <- transform_sample_counts(GP.family, function(x) x / sum(x))
+
+# Subset object to top N taxa
+GP.genus.prop.top <- prune_taxa(top, GP.family.prop)
+
+# Melt the phyloseq object to a data frame
+df <- psmelt(GP.genus.prop.top)
+
+fam_colors <- c(
+  "grey22", "darkcyan", "orchid1", "green", "orange", "blue", "tomato2", "olivedrab", "grey47",
+  "cyan", "coral3", "darkgreen", "magenta", "dodgerblue", "firebrick", "yellow", "purple4",
+  "lightblue", "grey77", "mediumpurple1", "tan4", "red", "darkblue", "yellowgreen",
+  "lightcoral", "lightgreen", "deepskyblue", "slateblue", "gold", "lightpink", "seagreen", "darkslategray", 
+  "saddlebrown", "lightgoldenrodyellow", "steelblue", "darkorchid", "darkslateblue", "khaki", "plum", 
+  "powderblue", "forestgreen", "royalblue", "lightsteelblue", "indianred", "chartreuse", "darkred", 
+  "mediumvioletred", "skyblue", "darkturquoise", "hotpink", "mediumseagreen", "lightsalmon"
+)
+
+
+# Create the plot
+ggplot(df, aes(x = Substrate_type, y = Abundance, fill = family)) +
+  geom_bar(stat = "identity", position = "fill") +
+  facet_wrap(~ Habitat_type, scales = "free_x") +
+  ylab("Relative Abundance") +
+  theme_minimal() +
+  scale_fill_manual(values = fam_colors) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_text(size = 10), 
+    legend.text = element_text(size = 8)
+  ) +
+  guides(fill = guide_legend(title = "family"))
+
+
+#11. To calculate the alpha diversity estimates #
+library(MuMIn)
+library(car)
+
+    # Univariate permanova #      
+#Calculate Observed Richness   
+#1. Fist for observed richness
+Diversity_estimates <- estimate_richness(physeq_rarefied, measures = c("Observed"))
+str(Diversity_estimates)
+
+   # Add diversity indices to sample_data
+sample_data(physeq_rarefied)$Observed <- Diversity_estimates$Observed
+  
+
+# Extract sample data
+sample_data_df_observed_substrtae <- data.frame(sample_data(physeq_rarefied))
+str(sample_data_df_observed_substrtae)
+
+#Test for assumptions
+leveneTest(Observed ~ Substrate_type, data = sample_data_df_observed_substrtae)
+leveneTest(Observed ~ Site, data = sample_data_df_observed_substrtae)
+shapiro.test(sample_data_df_observed_substrtae$Observed)
+
+
+#Use permanova because data is non parametric
+#first calculate euclidean distance matrix, then do permanova 
+
+dist_matrix <- dist(Diversity_estimates$Observed, method = "euclidean")
+
+permanova_result <- adonis2(dist_matrix ~ Habitat_type * Substrate_type * Site, data = sample_data_df_observed_substrtae)
+
+# View results
+print(permanova_result)
+
+#12. To calculate the beta diversity estimates #
+
+# Convert OTU abundances to 0/1's
+physeq_pa <- phyloseq_standardize_otu_abundance(physeq_rarefied, method = "pa")
+
+# Make NMDS plot #
+
+set.seed(1)
+
+physeq_PA_nmds <- ordinate(
+  physeq = physeq_pa, 
+  method = "NMDS", 
+  distance = "jaccard"
+)
+
+# Create a combined factor for Site (estuary) and substrate type
+sample_data(physeq_pa)$Site_Substrate_type <- with(sample_data(physeq_pa), 
+                                                   paste(Site, Substrate_type, sep = "_"))
+# Ensure it's a factor
+sample_data(physeq_pa)$Site_Substrate_type <- as.factor(sample_data(physeq_pa)$Site_Substrate_type)
+
+# Plot NMDS with combined Site_Substrate_type factor
+plot_ordination(
+  physeq = physeq_pa,
+  ordination = physeq_PA_nmds,
+  color = "Site_Substrate_type",  # Use the combined factor for color
+  shape = "Site_Substrate_type"   # Use the combined factor for shape
+) + 
+  scale_color_manual(values = default_colors) +  # Define colors for each Estuary_Season
+  geom_point(aes(color = Site_Substrate_type, shape = Site_Substrate_type), alpha = 0.7, size = 6) +
+  theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    text = element_text(size = 20),  # Increase the base text size
+    axis.title = element_text(size = 18),  # Increase axis title size
+    axis.text = element_text(size = 16),  # Increase axis text size
+    legend.title = element_text(size = 16),  # Increase legend title size
+    legend.text = element_text(size = 14)  # Increase legend text size
+  )
+
+custom_colors <- c("Kosi_bay_Water" = "lightblue", "Kosi_bay_Sediment" = "darkblue",
+                   "Mngazana_Water" = "lightgreen", "Mngazana_Sediment" = "forestgreen",
+                   "Nahoon_Water" = "orange", "Nahoon_Sediment" = "yellow")
+
+custom_shapes <- c("Kosi_bay_Water" = 16, "Kosi_bay_Sediment" = 16,  # Circle for Kosi Bay
+                   "Mngazana_Water" = 15, "Mngazana_Sediment" = 15,  # Rectangle for Mngazana
+                   "Nahoon_Water" = 17, "Nahoon_Sediment" = 17)
+
+# Plot with custom colors and shapes
+plot_ordination(
+  physeq = physeq_pa,
+  ordination = physeq_PA_nmds,
+  color = "Site_Substrate_type",
+  shape = "Site_Substrate_type"
+) + 
+  scale_color_manual(values = custom_colors) +
+  scale_shape_manual(values = custom_shapes) +
+  geom_point(alpha = 0.7, size = 6) +
+  #geom_text(aes(label = Sample_Name2), vjust = -1, size = 5, color = "black") +  # Add sample labels
+  theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    text = element_text(size = 20),  # Increase the base text size
+    axis.title = element_text(size = 18),  # Increase axis title size
+    axis.text = element_text(size = 16),  # Increase axis text size
+    legend.title = element_text(size = 16),  # Increase legend title size
+    legend.text = element_text(size = 14)  # Increase legend text size
+  )
+
+
+# Make another NMDS plot this time with habitat type with site (estuary)
+set.seed(1)
+
+physeq_PA_nmds <- ordinate(
+  physeq = physeq_pa, 
+  method = "NMDS", 
+  distance = "jaccard"
+)
+
+# Create a combined factor for Site and !!!habitat type!!!!!!!!!!!
+sample_data(physeq_pa)$Site_Habitat_type <- with(sample_data(physeq_pa), 
+                                                 paste(Site, Habitat_type, sep = "_"))
+# Ensure it's a factor
+sample_data(physeq_pa)$Site_Habitat_type <- as.factor(sample_data(physeq_pa)$Site_Habitat_type)
+
+# Plot NMDS with combined Site_Habitat_type factor
+plot_ordination(
+  physeq = physeq_pa,
+  ordination = physeq_PA_nmds,
+  color = "Site_Habitat_type",  # Use the combined factor for color
+  shape = "Site_Habitat_type"   # Use the combined factor for shape
+) + 
+  scale_color_manual(values = default_colors) +  # Define colors for each Estuary_Season
+  geom_point(aes(color = Site_Habitat_type, shape = Site_Habitat_type), alpha = 0.7, size = 6) +
+  theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    text = element_text(size = 20),  # Increase the base text size
+    axis.title = element_text(size = 18),  # Increase axis title size
+    axis.text = element_text(size = 16),  # Increase axis text size
+    legend.title = element_text(size = 16),  # Increase legend title size
+    legend.text = element_text(size = 14)  # Increase legend text size
+  )
+
+custom_colors <- c("Kosi_bay_Mangroves" = "lightblue", "Kosi_bay_Seagrass" = "darkblue",
+                   "Mngazana_Mangroves" = "lightgreen", "Mngazana_Seagrass" = "forestgreen",
+                   "Nahoon_Mangroves" = "orange", "Nahoon_Seagrass" = "yellow")
+
+custom_shapes <- c("Kosi_bay_Mangroves" = 16, "Kosi_bay_Seagrass" = 16,  # Circle for Kosi Bay
+                   "Mngazana_Mangroves" = 15, "Mngazana_Seagrass" = 15,  # Rectangle for Mngazana
+                   "Nahoon_Mangroves" = 17, "Nahoon_Seagrass" = 17)
+
+# Plot with custom colors and shapes
+plot_ordination(
+  physeq = physeq_pa,
+  ordination = physeq_PA_nmds,
+  color = "Site_Habitat_type",
+  shape = "Site_Habitat_type"
+) + 
+  scale_color_manual(values = custom_colors) +
+  scale_shape_manual(values = custom_shapes) +
+  geom_point(alpha = 0.7, size = 6) +
+  #geom_text(aes(label = Sample_Name2), vjust = -1, size = 5, color = "black") +  # Add sample labels
+  theme(
+    panel.background = element_blank(),
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    text = element_text(size = 20),  # Increase the base text size
+    axis.title = element_text(size = 18),  # Increase axis title size
+    axis.text = element_text(size = 16),  # Increase axis text size
+    legend.title = element_text(size = 16),  # Increase legend title size
+    legend.text = element_text(size = 14)  # Increase legend text size
+  )
+
+# Conduct a multivariate PERMANOVA #
+set.seed(1)
+
+# Calculate jaccard distance matrix
+physeq_pa_permanova = phyloseq::distance(physeq_pa, method = "jaccard")
+
+# make a data frame from the sample_data
+sampledf_physeq_pa<- data.frame(sample_data(physeq_pa))
+
+# Adonis (PERMANOVA) test
+adonis2(physeq_pa_permanova ~ Substrate_type*Habitat_type*Site, data = sampledf_physeq_pa)
+
+#13. Conduct a  permdisp test #
+#First do it for substrate type 
+# Calculate  distance matrix
+physeq_pa_permanova = phyloseq::distance(physeq_pa, method = "jaccard")
+
+# Define your grouping factor
+Substrate_type_betadisper <- sample_data(physeq_pa)$Substrate_type
+Habitat_type_betadisper <- sample_data(physeq_pa)$Habitat_type
+Site_betadisper <- sample_data(physeq_pa)$Site
+
+
+# Perform the PERMDISP test
+permdisp_results <- betadisper(physeq_pa_permanova,Site_betadisper)
+
+# ANOVA test
+anova_results <- anova(permdisp_results)
+print(anova_results)
+
+tukey_results <-TukeyHSD(permdisp_results)
+print(tukey_results)
+
+#14. Conduct a SIMPER ANALYSIS #
+#do it at family level 
+family2 <- tax_glom(physeq_pa, taxrank = "family")
+
+
+#Simper analysis for all the estuaries , substrate type, habitat type
+sample_data_simper <- sample_data(family2)
+
+ALL_OTUs = as(otu_table(family2), "matrix")
+if(taxa_are_rows(family2)){ALL_OTUs <- t(ALL_OTUs)}
+ALL_OTUs_scaled = as.data.frame(ALL_OTUs)
+ALL_simper <- simper(ALL_OTUs_scaled, sample_data_simper$Substrate_type, permutations = 100)
+
+print(ALL_simper)
+summary(ALL_simper)
+
+
+#Simper analysis for estuaries
+ALL_OTUs = as(otu_table(family2), "matrix")
+if(taxa_are_rows(family2)){ALL_OTUs <- t(ALL_OTUs)}
+ALL_OTUs_scaled = as.data.frame(ALL_OTUs)
+ALL_simper <- simper(ALL_OTUs_scaled, sample_data_simper$Site, permutations = 100)
+
+print(ALL_simper)
+
+summary(ALL_simper)
+
+#Simper analysis for habitat
+ALL_OTUs = as(otu_table(family2), "matrix")
+if(taxa_are_rows(family2)){ALL_OTUs <- t(ALL_OTUs)}
+ALL_OTUs_scaled = as.data.frame(ALL_OTUs)
+ALL_simper <- simper(ALL_OTUs_scaled, sample_data_simper$Habitat_type, permutations = 100)
+
+print(ALL_simper)
+summary(ALL_simper)
+
+
